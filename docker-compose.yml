@@ -1,0 +1,51 @@
+name: maf
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: mssql
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "${SA_PASSWORD}"
+    volumes:
+      - ./db:/scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/1433' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  db-init:
+    image: fabiang/sqlcmd:latest
+    depends_on:
+      mssql:
+        condition: service_healthy
+    environment:
+      SA_PASSWORD: "${SA_PASSWORD}"
+    volumes:
+      - ./db:/scripts:ro
+    entrypoint: >
+      sh -c '
+        for i in $(seq 1 40); do
+          sqlcmd -C -S mssql -U sa -P "$SA_PASSWORD" -Q "SELECT 1" >/dev/null 2>&1 && break || sleep 3;
+        done;
+        sqlcmd -C -S mssql -U sa -P "$SA_PASSWORD" -d master -i /scripts/init.sql
+      '
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: ./src/Users.Api/Dockerfile
+    container_name: usersapi
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_ENVIRONMENT: "Development"
+      ConnectionStrings__SqlServer: "Server=mssql;Database=UsersDb;User Id=sa;Password=${SA_PASSWORD};TrustServerCertificate=True;"
+    ports:
+     - "8080:8080"
+    depends_on:
+      mssql:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
